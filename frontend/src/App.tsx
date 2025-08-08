@@ -267,7 +267,7 @@ function App() {
             <button
               type="submit"
               disabled={loading}
-              className="btn btn-primary"
+              className="btn btn-primary btn-full"
             >
               {loading ? 'Processing...' : (isLogin ? 'Sign in' : 'Register')}
             </button>
@@ -408,7 +408,7 @@ function App() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="btn btn-primary"
+                  className="btn btn-primary btn-full"
                 >
                   {loading ? 'Logging in...' : 'Admin Login'}
                 </button>
