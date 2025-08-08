@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const RadiusService = require('./radius-service');
+const RadiusClient = require('./radius-client');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -62,11 +62,8 @@ app.post('/api/auth/register', async (req, res) => {
       [companyName, fullName, email, phoneNumber]
     );
     
-    // Create RADIUS user
-    await pool.query(
-      'INSERT INTO radius_users (username, attribute, op, value) VALUES ($1, $2, $3, $4)',
-      [email, 'Cleartext-Password', ':=', phoneNumber]
-    );
+    // Note: RADIUS user should be configured in your existing FreeRADIUS server
+    // The user will be authenticated against your FreeRADIUS during login
     
     // Generate JWT token
     const token = jwt.sign(
@@ -90,24 +87,39 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// User login
+// User login (using RADIUS authentication)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, phoneNumber } = req.body;
     
-    // Find user in PostgreSQL
+    // Authenticate against existing FreeRADIUS server
+    const radiusResult = await radiusClient.authenticate(email, phoneNumber);
+    
+    if (!radiusResult.success) {
+      return res.status(401).json({ error: radiusResult.message || 'Invalid credentials' });
+    }
+    
+    // Find user in PostgreSQL (for user details)
     const user = await pool.query(
-      'SELECT * FROM users WHERE email = $1 AND phone_number = $2',
-      [email, phoneNumber]
+      'SELECT * FROM users WHERE email = $1',
+      [email]
     );
     
     if (user.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ error: 'User not found in system' });
+    }
+    
+    // Send accounting start to RADIUS
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    try {
+      await radiusClient.sendAccounting(email, sessionId, 'Start');
+    } catch (acctError) {
+      console.warn('RADIUS accounting failed:', acctError.message);
     }
     
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.rows[0].id, email: user.rows[0].email },
+      { userId: user.rows[0].id, email: user.rows[0].email, sessionId },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -364,16 +376,24 @@ app.get('/api/admin/export/:format', async (req, res) => {
   }
 });
 
-// Start RADIUS service
-const radiusService = new RadiusService();
-radiusService.start();
+// Initialize RADIUS client
+const radiusClient = new RadiusClient();
+
+// Test RADIUS connection on startup
+radiusClient.testConnection().then(success => {
+  if (success) {
+    console.log('🔐 RADIUS client connection verified');
+  } else {
+    console.log('⚠️  RADIUS client connection failed - check configuration');
+  }
+});
 
 // Start server
 app.listen(port, () => {
   console.log(`🚀 LIQUID Backend running on http://localhost:${port}`);
   console.log(`📊 Health check: http://localhost:${port}/health`);
   console.log(`💾 Using PostgreSQL database (liquid_hotspot)`);
-  console.log(`🔐 FreeRADIUS server running on port 1812`);
+  console.log(`🔐 RADIUS client configured for existing FreeRADIUS server`);
 });
 
 module.exports = app; 
