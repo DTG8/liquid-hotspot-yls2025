@@ -366,11 +366,13 @@ function App() {
       <div className="dashboard">
                             <div className="dashboard-header">
                       <div>
-                        <h1 className="dashboard-title">Admin Panel</h1>
+                        <h1 className="dashboard-title">
+                          Admin Panel
+                          <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 'normal', marginLeft: '12px' }}>
+                            Access: ?admin=true
+                          </span>
+                        </h1>
                         <p className="dashboard-subtitle">2025 Youth Leadership Summit #YLS2025</p>
-                        <p style={{ fontSize: '12px', color: '#a0aec0', marginTop: '4px' }}>
-                          Access: Add ?admin=true to URL
-                        </p>
                       </div>
                       <button onClick={() => setCurrentPage('portal')} className="btn btn-secondary">
                         Back
