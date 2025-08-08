@@ -62,8 +62,11 @@ app.post('/api/auth/register', async (req, res) => {
       [companyName, fullName, email, phoneNumber]
     );
     
-    // Note: RADIUS user should be configured in your existing FreeRADIUS server
-    // The user will be authenticated against your FreeRADIUS during login
+    // Create RADIUS user in the radius_users table
+    await pool.query(
+      'INSERT INTO radius_users (username, attribute, op, value) VALUES ($1, $2, $3, $4)',
+      [email, 'Cleartext-Password', ':=', phoneNumber]
+    );
     
     // Generate JWT token
     const token = jwt.sign(
