@@ -4,6 +4,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const RadiusClient = require('./radius-client');
+const MikroTikClient = require('./mikrotik-client');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -35,6 +36,29 @@ pool.query('SELECT NOW()', (err, res) => {
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
+
+// Initialize RADIUS client
+const radiusClient = new RadiusClient();
+
+// Initialize MikroTik client
+const mikrotikClient = new MikroTikClient();
+
+// Test connections on startup
+radiusClient.testConnection().then(success => {
+  if (success) {
+    console.log('🔐 RADIUS client connection verified');
+  } else {
+    console.log('⚠️  RADIUS client connection failed - check configuration');
+  }
+});
+
+mikrotikClient.testConnection().then(success => {
+  if (success) {
+    console.log('📡 MikroTik client connection verified');
+  } else {
+    console.log('⚠️  MikroTik client connection failed - check configuration');
+  }
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -120,6 +144,18 @@ app.post('/api/auth/login', async (req, res) => {
       console.warn('RADIUS accounting failed:', acctError.message);
     }
     
+    // 🚀 AUTHORIZE USER ON MIKROTIK FOR INTERNET ACCESS
+    try {
+      const mikrotikResult = await mikrotikClient.authorizeUser(email, sessionId);
+      if (mikrotikResult.success) {
+        console.log(`✅ User ${email} authorized for internet access on MikroTik`);
+      } else {
+        console.warn(`⚠️  MikroTik authorization failed for ${email}:`, mikrotikResult.message);
+      }
+    } catch (mikrotikError) {
+      console.warn('MikroTik authorization failed:', mikrotikError.message);
+    }
+    
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.rows[0].id, email: user.rows[0].email, sessionId },
@@ -139,6 +175,51 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// User logout (deauthorize from MikroTik and send RADIUS accounting stop)
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userEmail = decoded.email;
+    const sessionId = decoded.sessionId;
+    
+    // Deauthorize user on MikroTik
+    try {
+      const mikrotikResult = await mikrotikClient.deauthorizeUser(userEmail);
+      if (mikrotikResult.success) {
+        console.log(`✅ User ${userEmail} deauthorized from MikroTik`);
+      } else {
+        console.warn(`⚠️  MikroTik deauthorization failed for ${userEmail}:`, mikrotikResult.message);
+      }
+    } catch (mikrotikError) {
+      console.warn('MikroTik deauthorization failed:', mikrotikError.message);
+    }
+    
+    // Send accounting stop to RADIUS
+    if (sessionId) {
+      try {
+        await radiusClient.sendAccounting(userEmail, sessionId, 'Stop');
+        console.log(`📊 RADIUS accounting stop sent for ${userEmail}`);
+      } catch (acctError) {
+        console.warn('RADIUS accounting stop failed:', acctError.message);
+      }
+    }
+    
+    res.json({
+      message: 'Logout successful',
+      success: true
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 
@@ -376,18 +457,6 @@ app.get('/api/admin/export/:format', async (req, res) => {
   } catch (error) {
     console.error('Export error:', error);
     res.status(500).json({ error: 'Failed to export data' });
-  }
-});
-
-// Initialize RADIUS client
-const radiusClient = new RadiusClient();
-
-// Test RADIUS connection on startup
-radiusClient.testConnection().then(success => {
-  if (success) {
-    console.log('🔐 RADIUS client connection verified');
-  } else {
-    console.log('⚠️  RADIUS client connection failed - check configuration');
   }
 });
 

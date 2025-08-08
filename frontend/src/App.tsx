@@ -275,11 +275,25 @@ function App() {
     }
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      if (token) {
+        // Call backend logout API to deauthorize user on MikroTik
+        await axios.post('/api/auth/logout', {}, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      }
+    } catch (error) {
+      console.error('Logout API error:', error)
+      // Continue with logout even if API call fails
+    }
+    
+    // Clear local storage and reset state
     localStorage.removeItem('token')
     setUser(null)
     setCurrentPage('portal')
-    setMessage('Logged out successfully')
+    setMessage('Logged out successfully - internet access revoked')
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
