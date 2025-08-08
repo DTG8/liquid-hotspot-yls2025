@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 
 // Configure axios base URL
-axios.defaults.baseURL = 'http://localhost:3001'
+axios.defaults.baseURL = 'http://173.212.222.124:3001'
 
 interface User {
   id: number
