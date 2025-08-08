@@ -4,9 +4,12 @@ const dgram = require('dgram');
 
 class RadiusService {
   constructor() {
-    this.secret = process.env.RADIUS_SECRET || 'testing123'; // RADIUS secret - change in production
+    this.host = process.env.RADIUS_HOST || 'localhost';
+    this.secret = process.env.RADIUS_SECRET || 'testing123';
     this.server = dgram.createSocket('udp4');
-    this.port = process.env.RADIUS_PORT || 1812; // Standard RADIUS auth port
+    this.port = parseInt(process.env.RADIUS_PORT) || 1812;
+    this.timeout = parseInt(process.env.RADIUS_TIMEOUT) || 5000;
+    this.retries = parseInt(process.env.RADIUS_RETRIES) || 3;
   }
 
   // Start RADIUS server
