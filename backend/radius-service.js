@@ -1,11 +1,12 @@
+require('dotenv').config();
 const radius = require('radius');
 const dgram = require('dgram');
 
 class RadiusService {
   constructor() {
-    this.secret = 'testing123'; // RADIUS secret - change in production
+    this.secret = process.env.RADIUS_SECRET || 'testing123'; // RADIUS secret - change in production
     this.server = dgram.createSocket('udp4');
-    this.port = 1812; // Standard RADIUS auth port
+    this.port = process.env.RADIUS_PORT || 1812; // Standard RADIUS auth port
   }
 
   // Start RADIUS server
@@ -45,11 +46,11 @@ class RadiusService {
       // Query PostgreSQL for user
       const { Pool } = require('pg');
       const pool = new Pool({
-        user: 'postgres',
-        host: 'localhost',
-        database: 'liquid_hotspot',
-        password: 'your_password',
-        port: 5432,
+        user: process.env.DB_USER || 'postgres',
+        host: process.env.DB_HOST || 'localhost',
+        database: process.env.DB_NAME || 'liquid_hotspot',
+        password: process.env.DB_PASSWORD || 'your_password',
+        port: process.env.DB_PORT || 5432,
       });
 
       const user = await pool.query(
@@ -113,32 +114,49 @@ class RadiusService {
     const sessionTime = packet.attributes['Acct-Session-Time'];
     const inputOctets = packet.attributes['Acct-Input-Octets'] || 0;
     const outputOctets = packet.attributes['Acct-Output-Octets'] || 0;
-    
-    console.log(`📊 RADIUS Accounting: ${username} - ${sessionTime}s, ${inputOctets + outputOctets} bytes`);
+    const acctStatusType = packet.attributes['Acct-Status-Type']; // Start, Stop, Interim-Update
+
+    console.log(`📊 RADIUS Accounting: ${username} - Session ID: ${sessionId}, Type: ${acctStatusType}`);
     
     try {
       const { Pool } = require('pg');
       const pool = new Pool({
-        user: 'postgres',
-        host: 'localhost',
-        database: 'liquid_hotspot',
-        password: 'your_password',
-        port: 5432,
+        user: process.env.DB_USER || 'postgres',
+        host: process.env.DB_HOST || 'localhost',
+        database: process.env.DB_NAME || 'liquid_hotspot',
+        password: process.env.DB_PASSWORD || 'your_password',
+        port: process.env.DB_PORT || 5432,
       });
 
-      // Insert or update accounting record
-      await pool.query(`
-        INSERT INTO radius_acct (
-          acctsessionid, username, acctsessiontime, 
-          acctinputoctets, acctoutputoctets, acctstarttime
-        ) VALUES ($1, $2, $3, $4, $5, NOW())
-        ON CONFLICT (acctsessionid) 
-        DO UPDATE SET 
-          acctsessiontime = $3,
-          acctinputoctets = $4,
-          acctoutputoctets = $5,
-          acctupdatetime = NOW()
-      `, [sessionId, username, sessionTime, inputOctets, outputOctets]);
+      if (acctStatusType === 'Start') {
+        await pool.query(`
+          INSERT INTO radius_acct (
+            acctsessionid, username, acctsessiontime, 
+            acctinputoctets, acctoutputoctets, acctstarttime, acctuniqueid
+          ) VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+          ON CONFLICT (acctsessionid) DO NOTHING
+        `, [sessionId, username, sessionTime, inputOctets, outputOctets, packet.attributes['Acct-Unique-Session-Id']]);
+      } else if (acctStatusType === 'Stop') {
+        await pool.query(`
+          UPDATE radius_acct SET 
+            acctsessiontime = $1,
+            acctinputoctets = $2,
+            acctoutputoctets = $3,
+            acctstoptime = NOW(),
+            acctupdatetime = NOW(),
+            acctterminatecause = $4
+          WHERE acctsessionid = $5
+        `, [sessionTime, inputOctets, outputOctets, packet.attributes['Acct-Terminate-Cause'], sessionId]);
+      } else if (acctStatusType === 'Interim-Update') {
+        await pool.query(`
+          UPDATE radius_acct SET 
+            acctsessiontime = $1,
+            acctinputoctets = $2,
+            acctoutputoctets = $3,
+            acctupdatetime = NOW()
+          WHERE acctsessionid = $4
+        `, [sessionTime, inputOctets, outputOctets, sessionId]);
+      }
 
       // Send accounting response
       const response = radius.encode({

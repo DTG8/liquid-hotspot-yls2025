@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -5,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const RadiusService = require('./radius-service');
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
@@ -15,11 +16,11 @@ app.use(express.json());
 const { Pool } = require('pg');
 
 const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'liquid_hotspot',
-  password: 'your_password', // Change this to your actual PostgreSQL password
-  port: 5432,
+  user: process.env.DB_USER || 'postgres',
+  host: process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'liquid_hotspot',
+  password: process.env.DB_PASSWORD || 'your_password',
+  port: process.env.DB_PORT || 5432,
 });
 
 // Test database connection
@@ -33,7 +34,7 @@ pool.query('SELECT NOW()', (err, res) => {
 });
 
 // JWT Secret
-const JWT_SECRET = 'your-secret-key-change-this-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 
 // Health check
 app.get('/health', (req, res) => {
@@ -195,7 +196,7 @@ app.post('/api/admin/login', async (req, res) => {
     const { username, password } = req.body;
     
     // Check admin credentials (hardcoded for simplicity)
-    if (username === 'admin' && password === 'admin123') {
+    if (username === (process.env.ADMIN_USERNAME || 'admin') && password === (process.env.ADMIN_PASSWORD || 'admin123')) {
       const token = jwt.sign(
         { adminId: 1, username: 'admin' },
         JWT_SECRET,
