@@ -62,6 +62,47 @@ function App() {
     setLoading(true)
     setMessage('')
 
+    // Client-side validation
+    if (!isLogin) {
+      if (!formData.companyName.trim()) {
+        setMessage('Company name is required.')
+        setLoading(false)
+        return
+      }
+      if (!formData.fullName.trim()) {
+        setMessage('Full name is required.')
+        setLoading(false)
+        return
+      }
+    }
+    
+    if (!formData.email.trim()) {
+      setMessage('Email is required.')
+      setLoading(false)
+      return
+    }
+    
+    if (!formData.phoneNumber.trim()) {
+      setMessage('Phone number is required.')
+      setLoading(false)
+      return
+    }
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(formData.email)) {
+      setMessage('Please enter a valid email address.')
+      setLoading(false)
+      return
+    }
+
+    // Phone validation (basic)
+    if (formData.phoneNumber.length < 10) {
+      setMessage('Please enter a valid phone number (at least 10 digits).')
+      setLoading(false)
+      return
+    }
+
     try {
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register'
       const response = await axios.post(endpoint, formData)
@@ -71,10 +112,36 @@ function App() {
         setUser(response.data.user)
         setCurrentPage('dashboard')
         setMessage(isLogin ? 'Login successful!' : 'Registration successful!')
+        
+        // Clear form after successful submission
+        if (!isLogin) {
+          setFormData({
+            companyName: '',
+            fullName: '',
+            email: '',
+            phoneNumber: ''
+          })
+        }
       }
-    } catch (error) {
-      setMessage('Error occurred. Please try again.')
+    } catch (error: any) {
       console.error(error)
+      
+      // Handle specific error responses
+      if (error.response?.status === 401) {
+        setMessage(isLogin ? 'Invalid email or phone number. Please check your credentials.' : 'Authentication failed.')
+      } else if (error.response?.status === 400) {
+        if (error.response.data?.error?.includes('already exists')) {
+          setMessage('An account with this email already exists. Try logging in instead.')
+        } else {
+          setMessage(error.response.data?.error || 'Invalid input. Please check all fields.')
+        }
+      } else if (error.response?.status === 500) {
+        setMessage('Server error. Please try again in a few moments.')
+      } else if (error.code === 'NETWORK_ERROR' || !error.response) {
+        setMessage('Network error. Please check your internet connection.')
+      } else {
+        setMessage('An unexpected error occurred. Please try again.')
+      }
     } finally {
       setLoading(false)
     }
@@ -85,6 +152,25 @@ function App() {
     setLoading(true)
     setMessage('')
 
+    // Client-side validation
+    if (!adminData.username.trim()) {
+      setMessage('Username is required.')
+      setLoading(false)
+      return
+    }
+    
+    if (!adminData.password.trim()) {
+      setMessage('Password is required.')
+      setLoading(false)
+      return
+    }
+
+    if (adminData.password.length < 6) {
+      setMessage('Password must be at least 6 characters long.')
+      setLoading(false)
+      return
+    }
+
     try {
       const response = await axios.post('/api/admin/login', adminData)
       
@@ -94,10 +180,28 @@ function App() {
         setMessage('Admin login successful!')
         fetchUsers(response.data.token)
         fetchStats(response.data.token)
+        
+        // Clear admin form
+        setAdminData({
+          username: '',
+          password: ''
+        })
       }
-    } catch (error) {
-      setMessage('Invalid admin credentials.')
+    } catch (error: any) {
       console.error(error)
+      
+      // Handle specific error responses
+      if (error.response?.status === 401) {
+        setMessage('Invalid username or password. Please check your admin credentials.')
+      } else if (error.response?.status === 403) {
+        setMessage('Access denied. Admin privileges required.')
+      } else if (error.response?.status === 500) {
+        setMessage('Server error. Please try again in a few moments.')
+      } else if (error.code === 'NETWORK_ERROR' || !error.response) {
+        setMessage('Network error. Please check your internet connection.')
+      } else {
+        setMessage('Admin login failed. Please try again.')
+      }
     } finally {
       setLoading(false)
     }
@@ -273,7 +377,10 @@ function App() {
             </button>
 
             {message && (
-              <div className={`message ${message.includes('Error') ? 'error' : 'success'}`}>
+              <div className={`message ${
+                message.includes('successful') || message.includes('Success') ? 'success' : 
+                message.includes('required') || message.includes('valid') || message.includes('least') ? 'warning' : 'error'
+              }`}>
                 {message}
               </div>
             )}
@@ -366,12 +473,7 @@ function App() {
       <div className="dashboard">
                             <div className="dashboard-header">
                       <div>
-                        <h1 className="dashboard-title">
-                          Admin Panel
-                          <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 'normal', marginLeft: '12px' }}>
-                            Access: ?admin=true
-                          </span>
-                        </h1>
+                        <h1 className="dashboard-title">Admin Panel</h1>
                         <p className="dashboard-subtitle">2025 Youth Leadership Summit #YLS2025</p>
                       </div>
                       <button onClick={() => setCurrentPage('portal')} className="btn btn-secondary">
@@ -415,7 +517,10 @@ function App() {
                   {loading ? 'Logging in...' : 'Admin Login'}
                 </button>
                 {message && (
-                  <div className={`message ${message.includes('Invalid') ? 'error' : 'success'}`}>
+                  <div className={`message ${
+                    message.includes('successful') || message.includes('Success') ? 'success' : 
+                    message.includes('required') || message.includes('valid') || message.includes('least') ? 'warning' : 'error'
+                  }`}>
                     {message}
                   </div>
                 )}

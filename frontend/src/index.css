@@ -155,17 +155,38 @@ body {
 
 /* Message styles */
 .message {
-  text-align: center;
+  padding: 12px 16px;
+  border-radius: 6px;
   margin-top: 16px;
+  text-align: center;
+  font-weight: 500;
   font-size: 14px;
+  transition: all 0.3s ease;
+  border-left: 4px solid;
 }
 
 .message.success {
+  background-color: #065f46;
   color: #10b981;
+  border: 1px solid #10b981;
+  border-left-color: #10b981;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.1);
 }
 
 .message.error {
+  background-color: #7f1d1d;
   color: #ef4444;
+  border: 1px solid #ef4444;
+  border-left-color: #ef4444;
+  box-shadow: 0 2px 4px rgba(239, 68, 68, 0.1);
+}
+
+.message.warning {
+  background-color: #78350f;
+  color: #f59e0b;
+  border: 1px solid #f59e0b;
+  border-left-color: #f59e0b;
+  box-shadow: 0 2px 4px rgba(245, 158, 11, 0.1);
 }
 
 /* Dashboard styles */
