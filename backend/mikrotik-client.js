@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { RouterOSAPI } = require('routeros-node');
+const MikroNode = require('mikronode');
 
 class MikroTikClient {
   constructor() {
@@ -11,33 +11,35 @@ class MikroTikClient {
 
   async authorizeUser(username, sessionId, userIP = null) {
     try {
-      const conn = new RouterOSAPI({
-        host: this.host,
-        user: this.username,
-        password: this.password,
-        port: this.port,
-      });
-
-      await conn.connect();
+      const device = new MikroNode(this.host, this.port);
+      
+      const conn = await device.connect().then(([login]) => login(this.username, this.password));
 
       console.log(`🔓 Authorizing user ${username} on MikroTik hotspot`);
 
       // Add user to hotspot users (this allows internet access)
-      const result = await conn.write('/ip/hotspot/user/add', [
-        '=name=' + username,
-        '=profile=default',
-        '=comment=LIQUID-' + sessionId,
-        '=disabled=no'
-      ]);
-
-      conn.close();
+      const chan = conn.openChannel();
+      
+      await new Promise((resolve, reject) => {
+        chan.write(['/ip/hotspot/user/add', `=name=${username}`, '=profile=default', `=comment=LIQUID-${sessionId}`, '=disabled=no'], (ch) => {
+          ch.on('done', (data) => {
+            chan.close();
+            conn.close();
+            resolve(data);
+          });
+          ch.on('trap', (error) => {
+            chan.close();
+            conn.close();
+            reject(new Error(error));
+          });
+        });
+      });
 
       console.log(`✅ User ${username} authorized for internet access`);
       
       return {
         success: true,
-        message: 'User authorized for internet access',
-        mikrotikId: result
+        message: 'User authorized for internet access'
       };
 
     } catch (error) {
@@ -52,29 +54,51 @@ class MikroTikClient {
 
   async deauthorizeUser(username) {
     try {
-      const conn = new RouterOSAPI({
-        host: this.host,
-        user: this.username,
-        password: this.password,
-        port: this.port,
-      });
-
-      await conn.connect();
+      const device = new MikroNode(this.host, this.port);
+      
+      const conn = await device.connect().then(([login]) => login(this.username, this.password));
 
       console.log(`🔒 Deauthorizing user ${username} on MikroTik hotspot`);
 
       // Find and remove user from hotspot users
-      const users = await conn.write('/ip/hotspot/user/print', [
-        '?name=' + username
-      ]);
-
-      if (users.length > 0) {
-        await conn.write('/ip/hotspot/user/remove', [
-          '=.id=' + users[0]['.id']
-        ]);
-      }
-
-      conn.close();
+      const chan = conn.openChannel();
+      
+      await new Promise((resolve, reject) => {
+        // First, find the user
+        chan.write(['/ip/hotspot/user/print', `?name=${username}`], (ch) => {
+          ch.on('done', (data) => {
+            if (data.length > 0 && data[0].data) {
+              const userId = data[0].data['.id'];
+              
+              // Remove the user
+              const removeChan = conn.openChannel();
+              removeChan.write(['/ip/hotspot/user/remove', `=.id=${userId}`], (removeCh) => {
+                removeCh.on('done', () => {
+                  removeChan.close();
+                  chan.close();
+                  conn.close();
+                  resolve();
+                });
+                removeCh.on('trap', (error) => {
+                  removeChan.close();
+                  chan.close();
+                  conn.close();
+                  reject(new Error(error));
+                });
+              });
+            } else {
+              chan.close();
+              conn.close();
+              resolve(); // User not found, consider it successful
+            }
+          });
+          ch.on('trap', (error) => {
+            chan.close();
+            conn.close();
+            reject(new Error(error));
+          });
+        });
+      });
 
       console.log(`✅ User ${username} deauthorized`);
       
@@ -95,18 +119,26 @@ class MikroTikClient {
 
   async getActiveUsers() {
     try {
-      const conn = new RouterOSAPI({
-        host: this.host,
-        user: this.username,
-        password: this.password,
-        port: this.port,
-      });
-
-      await conn.connect();
-
-      const activeUsers = await conn.write('/ip/hotspot/active/print');
+      const device = new MikroNode(this.host, this.port);
       
-      conn.close();
+      const conn = await device.connect().then(([login]) => login(this.username, this.password));
+
+      const chan = conn.openChannel();
+      
+      const activeUsers = await new Promise((resolve, reject) => {
+        chan.write(['/ip/hotspot/active/print'], (ch) => {
+          ch.on('done', (data) => {
+            chan.close();
+            conn.close();
+            resolve(data);
+          });
+          ch.on('trap', (error) => {
+            chan.close();
+            conn.close();
+            reject(new Error(error));
+          });
+        });
+      });
 
       return {
         success: true,
@@ -124,22 +156,30 @@ class MikroTikClient {
 
   async testConnection() {
     try {
-      const conn = new RouterOSAPI({
-        host: this.host,
-        user: this.username,
-        password: this.password,
-        port: this.port,
-      });
-
-      await conn.connect();
+      const device = new MikroNode(this.host, this.port);
+      
+      const conn = await device.connect().then(([login]) => login(this.username, this.password));
       
       // Test by getting system identity
-      const identity = await conn.write('/system/identity/print');
+      const chan = conn.openChannel();
       
-      conn.close();
+      const identity = await new Promise((resolve, reject) => {
+        chan.write(['/system/identity/print'], (ch) => {
+          ch.on('done', (data) => {
+            chan.close();
+            conn.close();
+            resolve(data);
+          });
+          ch.on('trap', (error) => {
+            chan.close();
+            conn.close();
+            reject(new Error(error));
+          });
+        });
+      });
 
       console.log('✅ MikroTik connection test successful');
-      console.log(`📡 Connected to: ${identity[0]?.name || 'MikroTik Router'}`);
+      console.log(`📡 Connected to: ${identity[0]?.data?.name || 'MikroTik Router'}`);
       
       return true;
     } catch (error) {
