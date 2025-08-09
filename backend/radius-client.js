@@ -1,6 +1,7 @@
 require('dotenv').config();
-const radius = require('radius');
 const dgram = require('dgram');
+const radius = require('radius');
+const { Pool } = require('pg');
 
 class RadiusClient {
   constructor() {
@@ -9,177 +10,85 @@ class RadiusClient {
     this.secret = process.env.RADIUS_SECRET || 'testing123';
     this.timeout = parseInt(process.env.RADIUS_TIMEOUT) || 5000;
     this.retries = parseInt(process.env.RADIUS_RETRIES) || 3;
+    
+    // PostgreSQL connection for direct authentication
+    this.pool = new Pool({
+      user: process.env.DB_USER || 'postgres',
+      host: process.env.DB_HOST || 'localhost',
+      database: process.env.DB_NAME || 'liquid_hotspot',
+      password: process.env.DB_PASSWORD || 'your_password',
+      port: process.env.DB_PORT || 5432,
+    });
   }
 
-  // Authenticate user against existing FreeRADIUS server
   async authenticate(username, password) {
-    return new Promise((resolve, reject) => {
-      const client = dgram.createSocket('udp4');
-      let attempts = 0;
-
-      const sendRequest = () => {
-        attempts++;
-        
-        // Create RADIUS Access-Request packet
-        const packet = radius.encode({
-          code: 'Access-Request',
-          secret: this.secret,
-          attributes: {
-            'User-Name': username,
-            'User-Password': password,
-            'NAS-IP-Address': '127.0.0.1',
-            'NAS-Port': 0,
-            'Service-Type': 'Login-User',
-            'Framed-Protocol': 'PPP'
-          }
-        });
-
-        console.log(`🔐 RADIUS Auth Request: ${username} to ${this.host}:${this.port} (attempt ${attempts})`);
-
-        // Send packet to FreeRADIUS server
-        client.send(packet, this.port, this.host, (err) => {
-          if (err) {
-            console.error('RADIUS send error:', err);
-            if (attempts < this.retries) {
-              setTimeout(sendRequest, 1000);
-            } else {
-              client.close();
-              reject(new Error('Failed to send RADIUS request'));
-            }
-            return;
-          }
-        });
-      };
-
-      // Handle response from FreeRADIUS server
-      client.on('message', (msg, rinfo) => {
-        try {
-          const response = radius.decode({ packet: msg, secret: this.secret });
-          
-          console.log(`📨 RADIUS Response: ${response.code} for ${username}`);
-          
-          client.close();
-          
-          if (response.code === 'Access-Accept') {
-            resolve({
-              success: true,
-              message: 'Authentication successful',
-              attributes: response.attributes
-            });
-          } else if (response.code === 'Access-Reject') {
-            resolve({
-              success: false,
-              message: 'Invalid credentials'
-            });
-          } else {
-            resolve({
-              success: false,
-              message: 'Authentication failed'
-            });
-          }
-        } catch (error) {
-          console.error('RADIUS decode error:', error);
-          client.close();
-          reject(new Error('Failed to decode RADIUS response'));
-        }
-      });
-
-      // Handle timeout
-      const timeoutId = setTimeout(() => {
-        if (attempts < this.retries) {
-          sendRequest();
-        } else {
-          client.close();
-          reject(new Error('RADIUS request timeout'));
-        }
-      }, this.timeout);
-
-      client.on('close', () => {
-        clearTimeout(timeoutId);
-      });
-
-      // Start the first request
-      sendRequest();
-    });
-  }
-
-  // Send accounting data to existing FreeRADIUS server
-  async sendAccounting(username, sessionId, acctStatusType, sessionTime = 0, inputOctets = 0, outputOctets = 0) {
-    return new Promise((resolve, reject) => {
-      const client = dgram.createSocket('udp4');
-
-      // Create RADIUS Accounting-Request packet
-      const packet = radius.encode({
-        code: 'Accounting-Request',
-        secret: this.secret,
-        attributes: {
-          'User-Name': username,
-          'Acct-Session-Id': sessionId,
-          'Acct-Status-Type': acctStatusType,
-          'Acct-Session-Time': sessionTime,
-          'Acct-Input-Octets': inputOctets,
-          'Acct-Output-Octets': outputOctets,
-          'NAS-IP-Address': '127.0.0.1',
-          'NAS-Port': 0
-        }
-      });
-
-      console.log(`📊 RADIUS Accounting: ${username} - ${acctStatusType}`);
-
-      // Send packet to FreeRADIUS server
-      client.send(packet, this.port, this.host, (err) => {
-        if (err) {
-          console.error('RADIUS accounting send error:', err);
-          client.close();
-          reject(new Error('Failed to send RADIUS accounting'));
-          return;
-        }
-      });
-
-      // Handle response
-      client.on('message', (msg, rinfo) => {
-        try {
-          const response = radius.decode({ packet: msg, secret: this.secret });
-          
-          console.log(`📨 RADIUS Accounting Response: ${response.code}`);
-          
-          client.close();
-          
-          if (response.code === 'Accounting-Response') {
-            resolve({
-              success: true,
-              message: 'Accounting successful'
-            });
-          } else {
-            resolve({
-              success: false,
-              message: 'Accounting failed'
-            });
-          }
-        } catch (error) {
-          console.error('RADIUS accounting decode error:', error);
-          client.close();
-          reject(new Error('Failed to decode RADIUS accounting response'));
-        }
-      });
-
-      // Handle timeout
-      setTimeout(() => {
-        client.close();
-        reject(new Error('RADIUS accounting timeout'));
-      }, this.timeout);
-    });
-  }
-
-  // Test connection to FreeRADIUS server
-  async testConnection() {
+    console.log(`🔐 Direct PostgreSQL Auth: ${username}`);
+    
     try {
-      // Test with a dummy authentication request
-      const result = await this.authenticate('test-user', 'test-password');
-      console.log('✅ RADIUS server connection test completed');
+      // Authenticate directly against PostgreSQL radius_users table
+      const result = await this.pool.query(
+        'SELECT * FROM radius_users WHERE username = $1 AND value = $2 AND attribute = $3',
+        [username, password, 'Cleartext-Password']
+      );
+
+      if (result.rows.length > 0) {
+        console.log(`✅ Authentication successful for ${username}`);
+        return {
+          success: true,
+          message: 'Authentication successful'
+        };
+      } else {
+        console.log(`❌ Authentication failed for ${username}`);
+        return {
+          success: false,
+          message: 'Invalid credentials'
+        };
+      }
+    } catch (error) {
+      console.error('❌ Database authentication error:', error.message);
+      return {
+        success: false,
+        message: 'Authentication error'
+      };
+    }
+  }
+
+  async sendAccounting(username, sessionId, acctType) {
+    console.log(`📊 Accounting ${acctType} for ${username} (session: ${sessionId})`);
+    
+    try {
+      if (acctType === 'Start') {
+        // Insert accounting start record
+        await this.pool.query(
+          'INSERT INTO radius_acct (acctsessionid, username, acctstarttime, acctuniqueid) VALUES ($1, $2, NOW(), $3)',
+          [sessionId, username, `${sessionId}-${Date.now()}`]
+        );
+      } else if (acctType === 'Stop') {
+        // Update accounting stop record
+        await this.pool.query(
+          'UPDATE radius_acct SET acctstoptime = NOW(), acctsessiontime = EXTRACT(EPOCH FROM (NOW() - acctstarttime))::INTEGER WHERE acctsessionid = $1 AND username = $2 AND acctstoptime IS NULL',
+          [sessionId, username]
+        );
+      }
+      
+      console.log(`✅ Accounting ${acctType} recorded for ${username}`);
       return true;
     } catch (error) {
-      console.error('❌ RADIUS server connection test failed:', error.message);
+      console.error(`❌ Accounting ${acctType} failed:`, error.message);
+      return false;
+    }
+  }
+
+  async testConnection() {
+    console.log('🔍 Testing direct PostgreSQL authentication...');
+    
+    try {
+      const result = await this.pool.query('SELECT COUNT(*) FROM radius_users');
+      const userCount = parseInt(result.rows[0].count);
+      console.log(`✅ Direct auth ready - ${userCount} users in database`);
+      return true;
+    } catch (error) {
+      console.error('❌ Direct auth test failed:', error.message);
       return false;
     }
   }

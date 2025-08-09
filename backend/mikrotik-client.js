@@ -7,6 +7,8 @@ class MikroTikClient {
     this.username = process.env.MIKROTIK_USERNAME || 'admin';
     this.password = process.env.MIKROTIK_PASSWORD || '';
     this.port = parseInt(process.env.MIKROTIK_PORT) || 8728;
+    
+    console.log(`🔧 MikroTik Client Config: ${this.username}@${this.host}:${this.port}`);
   }
 
   async authorizeUser(username, sessionId, userIP = null) {
@@ -45,7 +47,14 @@ class MikroTikClient {
       };
 
     } catch (error) {
-      console.error('❌ MikroTik authorization failed:', error.message);
+      console.error('❌ MikroTik authorization failed:', {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        syscall: error.syscall,
+        address: error.address,
+        port: error.port
+      });
       return {
         success: false,
         message: 'Failed to authorize user on MikroTik',
@@ -110,7 +119,14 @@ class MikroTikClient {
       };
 
     } catch (error) {
-      console.error('❌ MikroTik deauthorization failed:', error.message);
+      console.error('❌ MikroTik deauthorization failed:', {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        syscall: error.syscall,
+        address: error.address,
+        port: error.port
+      });
       return {
         success: false,
         message: 'Failed to deauthorize user',
@@ -148,7 +164,14 @@ class MikroTikClient {
       };
 
     } catch (error) {
-      console.error('❌ Failed to get active users:', error.message);
+      console.error('❌ Failed to get active users:', {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        syscall: error.syscall,
+        address: error.address,
+        port: error.port
+      });
       return {
         success: false,
         error: error.message
@@ -158,9 +181,17 @@ class MikroTikClient {
 
   async testConnection() {
     try {
+      console.log(`🔍 Testing MikroTik connection to ${this.username}@${this.host}:${this.port}`);
+      
       const device = new MikroNode(this.host, this.port);
       
-      const conn = await device.connect().then(([login]) => login(this.username, this.password));
+      console.log('🔗 Attempting to connect...');
+      const conn = await device.connect().then(([login]) => {
+        console.log('🔑 Connected, attempting login...');
+        return login(this.username, this.password);
+      });
+      
+      console.log('✅ Login successful, testing API call...');
       
       // Test by getting system identity
       const chan = conn.openChannel('test-connection');
@@ -185,7 +216,32 @@ class MikroTikClient {
       
       return true;
     } catch (error) {
-      console.error('❌ MikroTik connection test failed:', error.message);
+      console.error('❌ MikroTik connection test failed:', {
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        syscall: error.syscall,
+        address: error.address,
+        port: error.port,
+        stack: error.stack
+      });
+      
+      // Provide helpful troubleshooting info
+      if (error.code === 'ECONNREFUSED') {
+        console.log('💡 Troubleshooting: Connection refused. Check:');
+        console.log('   - MikroTik API service is enabled (/ip service enable api)');
+        console.log('   - Firewall allows connections to port 8728');
+        console.log('   - Router is accessible from this server');
+      } else if (error.code === 'ETIMEDOUT') {
+        console.log('💡 Troubleshooting: Connection timeout. Check:');
+        console.log('   - Network connectivity to MikroTik router');
+        console.log('   - Firewall rules blocking the connection');
+      } else if (error.code === 'ENOTFOUND') {
+        console.log('💡 Troubleshooting: Host not found. Check:');
+        console.log('   - MikroTik IP address is correct');
+        console.log('   - DNS resolution (if using hostname)');
+      }
+      
       return false;
     }
   }

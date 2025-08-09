@@ -4,7 +4,21 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const RadiusClient = require('./radius-client');
-const MikroTikClient = require('./mikrotik-client');
+const { Pool } = require('pg');
+
+// Only require MikroTik client if enabled
+const MIKROTIK_ENABLED = process.env.MIKROTIK_ENABLED !== 'false';
+let MikroTikClient, mikrotikClient;
+
+if (MIKROTIK_ENABLED) {
+  try {
+    MikroTikClient = require('./mikrotik-client');
+    mikrotikClient = new MikroTikClient();
+  } catch (error) {
+    console.warn('⚠️  MikroTik client failed to initialize:', error.message);
+    console.log('🔧 MikroTik integration disabled');
+  }
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -14,8 +28,6 @@ app.use(cors());
 app.use(express.json());
 
 // PostgreSQL database connection
-const { Pool } = require('pg');
-
 const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'localhost',
@@ -40,9 +52,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-pro
 // Initialize RADIUS client
 const radiusClient = new RadiusClient();
 
-// Initialize MikroTik client
-const mikrotikClient = new MikroTikClient();
-
 // Test connections on startup
 radiusClient.testConnection().then(success => {
   if (success) {
@@ -52,53 +61,61 @@ radiusClient.testConnection().then(success => {
   }
 });
 
-mikrotikClient.testConnection().then(success => {
-  if (success) {
-    console.log('📡 MikroTik client connection verified');
-  } else {
-    console.log('⚠️  MikroTik client connection failed - check configuration');
-  }
-});
+if (MIKROTIK_ENABLED && mikrotikClient) {
+  mikrotikClient.testConnection().then(success => {
+    if (success) {
+      console.log('📡 MikroTik client connection verified');
+    } else {
+      console.log('⚠️  MikroTik client connection failed - check configuration');
+    }
+  });
+} else {
+  console.log('🔧 MikroTik integration is disabled');
+}
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', message: 'LIQUID Backend is running' });
+  res.json({ 
+    status: 'OK', 
+    message: 'LIQUID Backend is running',
+    mikrotik_enabled: MIKROTIK_ENABLED
+  });
 });
 
-// User registration
+// User registration (UPDATED to use PostgreSQL and radius_users table)
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { companyName, fullName, email, phoneNumber } = req.body;
-    
-    // Check if user already exists
+
+    // Check if user already exists in users table
     const existingUser = await pool.query(
       'SELECT * FROM users WHERE email = $1',
       [email]
     );
-    
+
     if (existingUser.rows.length > 0) {
       return res.status(400).json({ error: 'User already exists' });
     }
-    
-    // Create user in PostgreSQL
+
+    // Create user in PostgreSQL users table
     const newUser = await pool.query(
       'INSERT INTO users (company_name, full_name, email, phone_number) VALUES ($1, $2, $3, $4) RETURNING *',
       [companyName, fullName, email, phoneNumber]
     );
-    
-    // Create RADIUS user in the radius_users table
+
+    // Create RADIUS user in the radius_users table (for FreeRADIUS to use)
     await pool.query(
       'INSERT INTO radius_users (username, attribute, op, value) VALUES ($1, $2, $3, $4)',
       [email, 'Cleartext-Password', ':=', phoneNumber]
     );
-    
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: newUser.rows[0].id, email: newUser.rows[0].email },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     res.json({
       message: 'User registered successfully',
       user: {
@@ -118,24 +135,24 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, phoneNumber } = req.body;
-    
+
     // Authenticate against existing FreeRADIUS server
     const radiusResult = await radiusClient.authenticate(email, phoneNumber);
-    
+
     if (!radiusResult.success) {
       return res.status(401).json({ error: radiusResult.message || 'Invalid credentials' });
     }
-    
+
     // Find user in PostgreSQL (for user details)
     const user = await pool.query(
       'SELECT * FROM users WHERE email = $1',
       [email]
     );
-    
+
     if (user.rows.length === 0) {
       return res.status(401).json({ error: 'User not found in system' });
     }
-    
+
     // Send accounting start to RADIUS
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     try {
@@ -143,17 +160,21 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (acctError) {
       console.warn('RADIUS accounting failed:', acctError.message);
     }
-    
-    // 🚀 AUTHORIZE USER ON MIKROTIK FOR INTERNET ACCESS
-    try {
-      const mikrotikResult = await mikrotikClient.authorizeUser(email, sessionId);
-      if (mikrotikResult.success) {
-        console.log(`✅ User ${email} authorized for internet access on MikroTik`);
-      } else {
-        console.warn(`⚠️  MikroTik authorization failed for ${email}:`, mikrotikResult.message);
+
+    // 🚀 AUTHORIZE USER ON MIKROTIK FOR INTERNET ACCESS (if enabled)
+    if (MIKROTIK_ENABLED && mikrotikClient) {
+      try {
+        const mikrotikResult = await mikrotikClient.authorizeUser(email, sessionId);
+        if (mikrotikResult.success) {
+          console.log(`✅ User ${email} authorized for internet access on MikroTik`);
+        } else {
+          console.warn(`⚠️  MikroTik authorization failed for ${email}:`, mikrotikResult.message);
+        }
+      } catch (mikrotikError) {
+        console.warn('MikroTik authorization failed:', mikrotikError.message);
       }
-    } catch (mikrotikError) {
-      console.warn('MikroTik authorization failed:', mikrotikError.message);
+    } else {
+      console.log(`ℹ️  User ${email} authenticated via RADIUS (MikroTik integration disabled)`);
     }
     
     // Generate JWT token
@@ -162,7 +183,7 @@ app.post('/api/auth/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     res.json({
       message: 'Login successful',
       user: {
@@ -191,16 +212,18 @@ app.post('/api/auth/logout', async (req, res) => {
     const userEmail = decoded.email;
     const sessionId = decoded.sessionId;
     
-    // Deauthorize user on MikroTik
-    try {
-      const mikrotikResult = await mikrotikClient.deauthorizeUser(userEmail);
-      if (mikrotikResult.success) {
-        console.log(`✅ User ${userEmail} deauthorized from MikroTik`);
-      } else {
-        console.warn(`⚠️  MikroTik deauthorization failed for ${userEmail}:`, mikrotikResult.message);
+    // Deauthorize user on MikroTik (if enabled)
+    if (MIKROTIK_ENABLED && mikrotikClient) {
+      try {
+        const mikrotikResult = await mikrotikClient.deauthorizeUser(userEmail);
+        if (mikrotikResult.success) {
+          console.log(`✅ User ${userEmail} deauthorized from MikroTik`);
+        } else {
+          console.warn(`⚠️  MikroTik deauthorization failed for ${userEmail}:`, mikrotikResult.message);
+        }
+      } catch (mikrotikError) {
+        console.warn('MikroTik deauthorization failed:', mikrotikError.message);
       }
-    } catch (mikrotikError) {
-      console.warn('MikroTik deauthorization failed:', mikrotikError.message);
     }
     
     // Send accounting stop to RADIUS
@@ -213,8 +236,12 @@ app.post('/api/auth/logout', async (req, res) => {
       }
     }
     
+    const message = MIKROTIK_ENABLED ? 
+      'Logged out successfully - internet access revoked' : 
+      'Logged out successfully';
+    
     res.json({
-      message: 'Logout successful',
+      message: message,
       success: true
     });
   } catch (error) {
@@ -223,18 +250,16 @@ app.post('/api/auth/logout', async (req, res) => {
   }
 });
 
-// Get user profile
+// Get user profile (UPDATED to use PostgreSQL)
 app.get('/api/users/profile', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    
+
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
-    
+
     const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user from PostgreSQL 
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
     
     if (userResult.rows.length === 0) {
@@ -242,8 +267,7 @@ app.get('/api/users/profile', async (req, res) => {
     }
     
     const user = userResult.rows[0];
-    const userEmail = user.email;
-    
+
     res.json({
       user: {
         id: user.id,
@@ -260,18 +284,16 @@ app.get('/api/users/profile', async (req, res) => {
   }
 });
 
-// Get user usage stats
+// Get user usage stats (UPDATED to use PostgreSQL)
 app.get('/api/users/usage', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    
+
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
-    
+
     const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user from PostgreSQL
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
     
     if (userResult.rows.length === 0) {
@@ -303,11 +325,11 @@ app.get('/api/users/usage', async (req, res) => {
   }
 });
 
-// Admin login
+// Admin login (remains hardcoded for simplicity)
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    
+
     // Check admin credentials (hardcoded for simplicity)
     if (username === (process.env.ADMIN_USERNAME || 'admin') && password === (process.env.ADMIN_PASSWORD || 'admin123')) {
       const token = jwt.sign(
@@ -315,7 +337,7 @@ app.post('/api/admin/login', async (req, res) => {
         JWT_SECRET,
         { expiresIn: '24h' }
       );
-      
+
       res.json({
         message: 'Admin login successful',
         token
@@ -329,23 +351,23 @@ app.post('/api/admin/login', async (req, res) => {
   }
 });
 
-// Get all users (admin)
+// Get all users (admin) (UPDATED to use PostgreSQL)
 app.get('/api/admin/users', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    
+
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
-    
+
     const decoded = jwt.verify(token, JWT_SECRET);
-    
+
     if (!decoded.adminId) {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    
+
     const allUsers = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
-    
+
     res.json({
       users: allUsers.rows.map(user => ({
         id: user.id,
@@ -362,35 +384,36 @@ app.get('/api/admin/users', async (req, res) => {
   }
 });
 
-// Get system stats (admin)
+// Get system stats (admin) (UPDATED to use PostgreSQL)
 app.get('/api/admin/stats', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    
+
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
-    
+
     const decoded = jwt.verify(token, JWT_SECRET);
-    
+
     if (!decoded.adminId) {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    
+
     // Get total users
     const totalUsersResult = await pool.query('SELECT COUNT(*) FROM users');
     const totalUsers = parseInt(totalUsersResult.rows[0].count);
-    
+
     // Get active sessions
     const activeSessionsResult = await pool.query(
       'SELECT COUNT(*) FROM radius_acct WHERE acctstoptime IS NULL'
     );
     const activeSessions = parseInt(activeSessionsResult.rows[0].count);
-    
+
     res.json({
       totalUsers: totalUsers,
       activeSessions: activeSessions,
-      systemStatus: 'Online'
+      systemStatus: 'Online',
+      mikrotikEnabled: MIKROTIK_ENABLED
     });
   } catch (error) {
     console.error('Stats error:', error);
@@ -403,20 +426,20 @@ app.get('/api/admin/export/:format', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     const format = req.params.format; // csv, json, pdf
-    
+
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
-    
+
     const decoded = jwt.verify(token, JWT_SECRET);
-    
+
     if (!decoded.adminId) {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    
+
     // Get all users with usage data
     const usersResult = await pool.query(`
-      SELECT 
+      SELECT
         u.id,
         u.company_name,
         u.full_name,
@@ -431,7 +454,7 @@ app.get('/api/admin/export/:format', async (req, res) => {
       GROUP BY u.id, u.company_name, u.full_name, u.email, u.phone_number, u.created_at
       ORDER BY u.created_at DESC
     `);
-    
+
     const users = usersResult.rows.map(user => ({
       id: user.id,
       companyName: user.company_name,
@@ -443,17 +466,17 @@ app.get('/api/admin/export/:format', async (req, res) => {
       totalSessionTime: parseInt(user.total_session_time),
       totalDataUsed: parseInt(user.total_data_used)
     }));
-    
+
     if (format === 'json') {
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="YLS2025_users_${new Date().toISOString().split('T')[0]}.json"`);
       res.json(users);
     } else if (format === 'csv') {
       const csvHeader = 'ID,Company Name,Full Name,Email,Phone Number,Registration Date,Total Sessions,Total Session Time (seconds),Total Data Used (bytes)\n';
-      const csvData = users.map(user => 
+      const csvData = users.map(user =>
         `${user.id},"${user.companyName}","${user.fullName}","${user.email}","${user.phoneNumber}","${user.createdAt}",${user.totalSessions},${user.totalSessionTime},${user.totalDataUsed}`
       ).join('\n');
-      
+
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="YLS2025_users_${new Date().toISOString().split('T')[0]}.csv"`);
       res.send(csvHeader + csvData);
@@ -461,10 +484,10 @@ app.get('/api/admin/export/:format', async (req, res) => {
       // For PDF, we'll return a simple text representation
       // In production, you'd use a library like puppeteer or jsPDF
       const pdfContent = `YLS2025 User Database Export\nGenerated: ${new Date().toLocaleString()}\n\n` +
-        users.map(user => 
+        users.map(user =>
           `ID: ${user.id}\nCompany: ${user.companyName}\nName: ${user.fullName}\nEmail: ${user.email}\nPhone: ${user.phoneNumber}\nRegistered: ${user.createdAt}\nSessions: ${user.totalSessions}\nSession Time: ${user.totalSessionTime}s\nData Used: ${user.totalDataUsed} bytes\n---`
         ).join('\n\n');
-      
+
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', `attachment; filename="YLS2025_users_${new Date().toISOString().split('T')[0]}.txt"`);
       res.send(pdfContent);
@@ -483,6 +506,11 @@ app.listen(port, () => {
   console.log(`📊 Health check: http://localhost:${port}/health`);
   console.log(`💾 Using PostgreSQL database (liquid_hotspot)`);
   console.log(`🔐 RADIUS client configured for existing FreeRADIUS server`);
+  if (MIKROTIK_ENABLED) {
+    console.log(`📡 MikroTik integration enabled`);
+  } else {
+    console.log(`🔧 MikroTik integration disabled`);
+  }
 });
 
 module.exports = app; 
