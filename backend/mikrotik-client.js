@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { RouterOSAPI } = require('node-routeros');
+const { RouterOSAPI } = require('routeros-node');
 
 class MikroTikClient {
   constructor() {
@@ -23,14 +23,14 @@ class MikroTikClient {
       console.log(`🔓 Authorizing user ${username} on MikroTik hotspot`);
 
       // Add user to hotspot users (this allows internet access)
-      const result = await conn.write('/ip/hotspot/user/add', {
-        name: username,
-        profile: 'default',
-        comment: `LIQUID-${sessionId}`,
-        disabled: 'no'
-      });
+      const result = await conn.write('/ip/hotspot/user/add', [
+        '=name=' + username,
+        '=profile=default',
+        '=comment=LIQUID-' + sessionId,
+        '=disabled=no'
+      ]);
 
-      await conn.close();
+      conn.close();
 
       console.log(`✅ User ${username} authorized for internet access`);
       
@@ -63,18 +63,18 @@ class MikroTikClient {
 
       console.log(`🔒 Deauthorizing user ${username} on MikroTik hotspot`);
 
-      // Remove user from hotspot users
-      const users = await conn.write('/ip/hotspot/user/print', {
-        '?name': username
-      });
+      // Find and remove user from hotspot users
+      const users = await conn.write('/ip/hotspot/user/print', [
+        '?name=' + username
+      ]);
 
       if (users.length > 0) {
-        await conn.write('/ip/hotspot/user/remove', {
-          '.id': users[0]['.id']
-        });
+        await conn.write('/ip/hotspot/user/remove', [
+          '=.id=' + users[0]['.id']
+        ]);
       }
 
-      await conn.close();
+      conn.close();
 
       console.log(`✅ User ${username} deauthorized`);
       
@@ -106,7 +106,7 @@ class MikroTikClient {
 
       const activeUsers = await conn.write('/ip/hotspot/active/print');
       
-      await conn.close();
+      conn.close();
 
       return {
         success: true,
@@ -136,10 +136,10 @@ class MikroTikClient {
       // Test by getting system identity
       const identity = await conn.write('/system/identity/print');
       
-      await conn.close();
+      conn.close();
 
       console.log('✅ MikroTik connection test successful');
-      console.log(`📡 Connected to: ${identity[0].name || 'MikroTik Router'}`);
+      console.log(`📡 Connected to: ${identity[0]?.name || 'MikroTik Router'}`);
       
       return true;
     } catch (error) {
