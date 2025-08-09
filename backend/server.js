@@ -233,11 +233,16 @@ app.get('/api/users/profile', async (req, res) => {
     }
     
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = users.find(u => u.id === decoded.userId);
     
-    if (!user) {
+    // Get user from PostgreSQL 
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
+    
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
+    
+    const user = userResult.rows[0];
+    const userEmail = user.email;
     
     res.json({
       user: {
@@ -265,13 +270,25 @@ app.get('/api/users/usage', async (req, res) => {
     }
     
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = users.find(u => u.id === decoded.userId);
     
-    // Get usage from radius_acct table (simulated)
-    const userUsage = radiusAcct.filter(acct => acct.username === user.email);
+    // Get user from PostgreSQL
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId]);
     
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = userResult.rows[0];
+    const userEmail = user.email;
+
+    // Get usage from radius_acct table
+    const usageResult = await pool.query(
+      'SELECT * FROM radius_acct WHERE username = $1 ORDER BY acctstarttime DESC',
+      [userEmail]
+    );
+
     res.json({
-      usage: userUsage.map(acct => ({
+      usage: usageResult.rows.map(acct => ({
         sessionId: acct.acctsessionid,
         startTime: acct.acctstarttime,
         endTime: acct.acctstoptime,
